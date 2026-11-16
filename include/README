@@ -1,37 +1,39 @@
+# RTM firmware headers
 
-This directory is intended for project header files.
+This directory contains the shared declarations and configuration for the
+STM32 radiometer firmware. Implementations are in `src/`; the main program
+coordinates the RF measurements, signal processing, Allan-deviation tracking,
+and serial telemetry.
 
-A header file is a file containing C declarations and macro definitions
-to be shared between several project source files. You request the use of a
-header file in your project source file (C, C++, etc) located in `src` folder
-by including it, with the C preprocessing directive `#include'.
+## Header overview
 
-```src/main.c
+- `config.h` defines the board pins, RF switching and sampling timings, ADC and
+  decimation settings, Allan-tracker parameters, and the SHT3x I2C address.
+- `types.h` defines RF and operating modes, the decimated measurement sample,
+  and the packed telemetry-frame data structure.
+- `rf_hal.h` declares `RFHardware`, which controls the RF switch, acquires ADC
+  samples, and updates the reference temperature from the SHT3x sensor.
+- `dsp_pipeline.h` declares `DSPPipeline` for trimmed-mean voltage conversion,
+  decimation, RF-path asymmetry compensation, and antenna-temperature
+  calculation.
+- `allan_tracker.h` declares `AllanTracker` for tracking Allan deviation,
+  selecting an integration time, adaptive filtering, and reporting readiness.
+- `telemetry.h` declares `TelemetryManager` for serial commands, CSV telemetry,
+  and CRC-16 calculation.
 
-#include "header.h"
+## Measurement flow
 
-int main (void)
-{
- ...
-}
-```
+The firmware switches between the antenna and reference paths, collects ADC
+samples for each, rejects outliers with a trimmed mean, and averages 20
+measurement cycles into an output sample (nominally 100 ms). It then applies
+the RF-path compensation and adaptive filtering, calculates the antenna
+temperature, and sends telemetry over UART at 115200 baud.
 
-Including a header file produces the same results as copying the header file
-into each source file that needs it. Such copying would be time-consuming
-and error-prone. With a header file, the related declarations appear
-in only one place. If they need to be changed, they can be changed in one
-place, and programs that include the header file will automatically use the
-new version when next recompiled. The header file eliminates the labor of
-finding and changing all the copies as well as the risk that a failure to
-find one copy will result in inconsistencies within a program.
+The serial command handler accepts `CMD:START`, `CMD:STOP`, `CMD:CAL_ASYM`,
+`CMD:KCAL=<value>`, and `CMD:DTDOP=<value>`.
 
-In C, the convention is to give header files names that end with `.h'.
+## Configuration and build
 
-Read more about using header files in official GCC documentation:
-
-* Include Syntax
-* Include Operation
-* Once-Only Headers
-* Computed Includes
-
-https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html
+Adjust hardware pins and acquisition or algorithm parameters in `config.h`.
+Build and upload the firmware using the PlatformIO `nucleo_f303re` environment
+defined in the project-level `platformio.ini`.
