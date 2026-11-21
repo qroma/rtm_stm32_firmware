@@ -18,6 +18,11 @@ public:
     float getKappa() const { return kappa_curr_; }
     void  setKCal(float k_cal) { k_cal_ = k_cal; }
     float getKCal() const { return k_cal_; }
+    static float linearizeDetectorMv(float v_mv);
+    static float computeAsymmetryKappa(float v_ant_mv, float v_et_mv);
+
+    float getInterpolatedKappa(uint32_t timestamp_ms) const;
+    float getCompensatedDiffInterpolated(const DecimatedSample& sample) const;
 
 private:
     // Акумулятори децимації

@@ -1,7 +1,13 @@
 #include "telemetry.h"
 #include <Arduino.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
-// Стандартний поліном CRC-16-CCITT (0x1021), сумісний з Python binascii.crc_hqx(data, 0xFFFF)
+char   TelemetryManager::rx_buf_[TelemetryManager::RX_BUF_SIZE]{};
+size_t TelemetryManager::rx_len_ = 0;
+
+// Стандартний поліном CRC-16-CCITT (0x1021), сумісний із Python binascii.crc_hqx(data, 0xFFFF)
 uint16_t TelemetryManager::computeCRC16(const uint8_t* data, size_t length) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < length; ++i) {
@@ -19,7 +25,6 @@ uint16_t TelemetryManager::computeCRC16(const uint8_t* data, size_t length) {
 
 void TelemetryManager::sendFrameCSV(const TelemetryFrame& frame) {
     char payload[160];
-    // Формуємо рядок кадру без CRC
     int len = snprintf(payload, sizeof(payload),
                        "$RTM,%lu,%lu,%u,%u,%.3f,%.3f,%.3f,%.2f,%.2f,%.4f,%.2f,%.3f",
                        frame.frame_counter,
@@ -35,7 +40,8 @@ void TelemetryManager::sendFrameCSV(const TelemetryFrame& frame) {
                        frame.tau_opt_sec,
                        frame.sigma_t_opt);
 
-    if (len > 0) {
+    // Захист від виходу за межі буфера при обрізанні snprintf
+    if (len > 0 && static_cast<size_t>(len) < sizeof(payload)) {
         uint16_t crc = computeCRC16(reinterpret_cast<const uint8_t*>(payload), static_cast<size_t>(len));
         Serial.print(payload);
         Serial.print('*');
@@ -47,27 +53,38 @@ void TelemetryManager::sendFrameCSV(const TelemetryFrame& frame) {
 }
 
 void TelemetryManager::processIncomingCommands(SystemMode& mode, DSPPipeline& dsp, AllanTracker& allan) {
-    // Команди від ПК (Python):
-    // "CMD:START"      -> перехід у штатний режим вимірювання
-    // "CMD:STOP"       -> зупинка (Idle)
-    // "CMD:CAL_ASYM"   -> запуск калібрування асиметрії комутатора k
-    // "CMD:KCAL=16.5"  -> оновлення крутизни двоточкового калібрування
-    if (!Serial.available()) return;
+    // Неблокуюче побайтове зчитування без динамічної пам'яті (нульовий таймаут)
+    while (Serial.available() > 0) {
+        char c = static_cast<char>(Serial.read());
+        if (c == '\r') continue;
 
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
+        if (c == '\n') {
+            rx_buf_[rx_len_] = '\0';
+            if (rx_len_ > 0) {
+                handleCommandLine(rx_buf_, mode, dsp, allan);
+            }
+            rx_len_ = 0;
+        } else if (rx_len_ < RX_BUF_SIZE - 1) {
+            rx_buf_[rx_len_++] = c;
+        } else {
+            // Захист від переповнення буфера сміттям на лінії
+            rx_len_ = 0;
+        }
+    }
+}
 
-    if (cmd == "CMD:START") {
+void TelemetryManager::handleCommandLine(const char* cmd, SystemMode& mode, DSPPipeline& dsp, AllanTracker& allan) {
+    if (std::strcmp(cmd, "CMD:START") == 0) {
         mode = SystemMode::Measuring;
-    } else if (cmd == "CMD:STOP") {
+    } else if (std::strcmp(cmd, "CMD:STOP") == 0) {
         mode = SystemMode::Idle;
-    } else if (cmd == "CMD:CAL_ASYM") {
+    } else if (std::strcmp(cmd, "CMD:CAL_ASYM") == 0) {
         mode = SystemMode::CalibratingAsym;
-    } else if (cmd.startsWith("CMD:KCAL=")) {
-        float val = cmd.substring(9).toFloat();
-        if (val > 0.1f) dsp.setKCal(val);
-    } else if (cmd.startsWith("CMD:DTDOP=")) {
-        float val = cmd.substring(10).toFloat();
+    } else if (std::strncmp(cmd, "CMD:KCAL=", 9) == 0) {
+        float val = strtof(cmd + 9, nullptr);
+        if (val > 0.01f) dsp.setKCal(val);
+    } else if (std::strncmp(cmd, "CMD:DTDOP=", 10) == 0) {
+        float val = strtof(cmd + 10, nullptr);
         if (val > 0.01f) allan.setAllowedError(val);
     }
 }
