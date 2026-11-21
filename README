@@ -117,3 +117,22 @@ The serial monitor should use 460800 baud:
 ```sh
 platformio device monitor --baud 460800
 ```
+
+## Tests
+
+The native test environment covers trimmed mean filtering, ADL5902
+linearization, asymmetry calibration/interpolation, 30-second history
+wraparound, Allan-deviation edge behavior, CRC-16-CCITT, and serial command
+validation.
+
+Run the native unit tests:
+
+```sh
+platformio test -e native
+```
+
+Build the STM32 firmware separately:
+
+```sh
+platformio run -e nucleo_f303re
+```
