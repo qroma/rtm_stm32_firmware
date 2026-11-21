@@ -41,7 +41,7 @@ void loop() {
         rf_hw.startAcquisition();
     }
 
-    // 2. Асинхронне опитування термодатчика еталона (SHT3x) — виконується паралельно з DMA
+    // 2. Асинхронне опитування термодатчика еталона (SHT3x) з перевіркою CRC-8
     uint32_t now_ms = millis();
     rf_hw.updateReferenceTemperatureAsync(now_ms);
 
@@ -54,30 +54,34 @@ void loop() {
     float v_ant_clean_mv = DSPPipeline::computeTrimmedMeanMv(raw_ant_buf, ADC_SAMPLES_PER_HALF);
     float v_et_clean_mv  = DSPPipeline::computeTrimmedMeanMv(raw_et_buf,  ADC_SAMPLES_PER_HALF);
 
-    // 5. Попередня децимація (кожні 20 циклів = 100 мс формуємо відлік та оновлюємо буфер)
+    // 5. Попередня децимація (кожні 20 циклів = 100 мс)
+    const bool is_measuring = (current_mode == SystemMode::Measuring);
     DecimatedSample dec_sample{};
-    if (dsp.pushCycleAndDecimate(v_ant_clean_mv, v_et_clean_mv, now_ms, dec_sample)) {
+    if (dsp.pushCycleAndDecimate(v_ant_clean_mv, v_et_clean_mv, now_ms, is_measuring, dec_sample)) {
+        float t_et = rf_hw.getReferenceTemperature();
 
-        // У режимі калібрування асиметрії обчислюємо k у лінеаризованій шкалі ADL5902 (2.23)
-        if (current_mode == SystemMode::CalibratingAsym && dec_sample.v_et_mv > 1.0f) {
-            float measured_kappa = DSPPipeline::computeAsymmetryKappa(dec_sample.v_ant_mv, dec_sample.v_et_mv);
-            dsp.updateCalibrationKappa(measured_kappa, now_ms);
+        // Режим калібрування асиметрії: усереднюємо 10 відліків (1.0 с), фіксуємо k та
+        // виконуємо ретроспективну кусково-лінійну інтерполяцію буфера історії (2.25)-(2.26)
+        if (current_mode == SystemMode::CalibratingAsym) {
+            if (dsp.accumulateCalibrationSample(dec_sample.v_ant_mv, dec_sample.v_et_mv)) {
+                if (dsp.finalizeAsymmetryCalibration(now_ms)) {
+                    dsp.flushInterpolatedHistory(t_et, TelemetryManager::sendInterpolatedSampleCSV);
+                }
+                current_mode = SystemMode::Measuring;
+            }
+            return;
         }
 
-        // Компенсація асиметрії в лінеаризованій шкалі потужності (2.24)
+        // Оперативна компенсація асиметрії для миттєвої індикації (2.24)
         float dv_raw_cor = dsp.getCompensatedDiff(dec_sample.v_ant_mv, dec_sample.v_et_mv);
 
         // Оновлення кумулятивних сум Аллана, пошук tau_opt та адаптивна фільтрація
         allan.pushSample(dv_raw_cor, dsp.getKCal());
         float dv_filtered = allan.getAdaptivelyFilteredValue();
+        float t_a         = dsp.getPrimaryAntennaTemp(dv_filtered, t_et);
 
-        // Первинна оцінка температури антени T_A (2.10)
-        float t_et = rf_hw.getReferenceTemperature();
-        float t_a  = dsp.getPrimaryAntennaTemp(dv_filtered, t_et);
-
-        // 6. Формування та відправлення кадру з CRC-16 на ПК (10 кадрів/с, не впливає на цикл Дікке)
+        // 6. Формування та відправлення оперативного кадру з CRC-16 на ПК (10 кадрів/с)
         TelemetryFrame frame{};
-        frame.sync_word     = 0xAA55;
         frame.frame_counter = ++frame_counter;
         frame.timestamp_ms  = now_ms;
         frame.mode          = static_cast<uint8_t>(current_mode);

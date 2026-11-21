@@ -1,39 +1,119 @@
-# RTM firmware headers
+# RTM STM32 firmware
 
-This directory contains the shared declarations and configuration for the
-STM32 radiometer firmware. Implementations are in `src/`; the main program
-coordinates the RF measurements, signal processing, Allan-deviation tracking,
-and serial telemetry.
+This project implements the acquisition and processing firmware for an STM32
+radiometer using the Nucleo-F303RE board, HMC849 RF switch, ADL5902 detector,
+and SHT3x reference-temperature sensor.
 
-## Header overview
+## Main firmware modules
 
-- `config.h` defines the board pins, RF switching and sampling timings, ADC and
-  decimation settings, Allan-tracker parameters, and the SHT3x I2C address.
-- `types.h` defines RF and operating modes, the decimated measurement sample,
-  and the packed telemetry-frame data structure.
-- `rf_hal.h` declares `RFHardware`, which controls the RF switch, acquires ADC
-  samples, and updates the reference temperature from the SHT3x sensor.
-- `dsp_pipeline.h` declares `DSPPipeline` for trimmed-mean voltage conversion,
-  decimation, RF-path asymmetry compensation, and antenna-temperature
-  calculation.
-- `allan_tracker.h` declares `AllanTracker` for tracking Allan deviation,
-  selecting an integration time, adaptive filtering, and reporting readiness.
-- `telemetry.h` declares `TelemetryManager` for serial commands, CSV telemetry,
-  and CRC-16 calculation.
+- `config.h` defines board pins, RF switching and ADC timings, decimation,
+  Allan-tracker parameters, detector linearization, UART, and sensor settings.
+- `types.h` defines RF sources, operating modes, decimated samples, and the
+  telemetry frame exchanged with the host.
+- `rf_hal.h/.cpp` controls the HMC849 switch, TIM2 switching, TIM6 sampling,
+  ADC1/DMA1 acquisition, and SHT3x I2C temperature polling.
+- `dsp_pipeline.h/.cpp` provides trimmed-mean filtering, detector
+  linearization, decimation, asymmetry compensation, calibration interpolation,
+  and antenna-temperature calculation.
+- `allan_tracker.h/.cpp` calculates Allan deviation, selects `tau_opt`,
+  stabilizes the integration time with a median filter, and reports readiness.
+- `telemetry.h/.cpp` parses serial commands and sends CRC-protected CSV frames.
+
+## Hardware acquisition
+
+- HMC849 antenna and reference switch control:
+  - `D8` selects antenna or 50-ohm reference.
+  - `D9` enables the switch. The switch is enabled with a low level.
+- ADC input: `A0` / `PA0` / ADC1 channel 1.
+- SHT3x reference-temperature sensor: I2C address `0x44`.
+- RF switching frequency: 200 Hz, consisting of two 2500-us half periods.
+- DMA acquisition starts 150 us after each switch transition.
+- TIM6 triggers ADC1 at 125 kHz.
+- ADC1 collects 256 samples for each phase.
+- The two antenna/reference banks use ping-pong DMA storage.
 
 ## Measurement flow
 
-The firmware switches between the antenna and reference paths, collects ADC
-samples for each, rejects outliers with a trimmed mean, and averages 20
-measurement cycles into an output sample (nominally 100 ms). It then applies
-the RF-path compensation and adaptive filtering, calculates the antenna
-temperature, and sends telemetry over UART at 115200 baud.
+1. TIM2 switches between the antenna and 50-ohm reference every 2500 us.
+2. TIM6 starts ADC1/DMA1 acquisition after each 150-us blanking interval.
+3. Each 256-sample half-phase buffer is sorted and filtered with a 12.5%
+   symmetric trimmed mean.
+4. Twenty Dicke cycles are averaged into a decimated sample every 100 ms.
+5. The ADL5902 voltage is linearized into the detector power scale.
+6. Asymmetry compensation and Allan-deviation/adaptive filtering are applied.
+7. The antenna-temperature estimate is calculated using the SHT3x reference
+   temperature.
+8. The result is sent over UART at 460800 baud as a CRC-protected ASCII frame.
 
-The serial command handler accepts `CMD:START`, `CMD:STOP`, `CMD:CAL_ASYM`,
-`CMD:KCAL=<value>`, and `CMD:DTDOP=<value>`.
+The SHT3x temperature is polled asynchronously once per second. Incoming sensor
+bytes are checked using the Sensirion SHT3x CRC-8 polynomial before the
+temperature is updated.
 
-## Configuration and build
+## Asymmetry calibration
 
-Adjust hardware pins and acquisition or algorithm parameters in `config.h`.
-Build and upload the firmware using the PlatformIO `nucleo_f303re` environment
-defined in the project-level `platformio.ini`.
+`CMD:CAL_ASYM` begins asymmetry calibration. For ten 100-ms decimated samples,
+the firmware averages the linearized antenna and reference voltages before
+calculating the asymmetry coefficient `k`.
+
+After calibration, the firmware:
+
+- switches back to measuring mode;
+- creates a piecewise-linear kappa interpolation across the calibration interval;
+- recalculates the last 30 seconds of measurement history, up to 300 samples;
+- sends the retrospectively corrected samples as `$RTM_COR` frames.
+
+Measurement samples enter the 30-second history buffer. Calibration samples
+are processed separately and are not added to the measurement history.
+
+## Serial telemetry
+
+### Operational frame
+
+```text
+$RTM,<counter>,<timestamp_ms>,<mode>,<ready>,<V_ant>,<V_et>,<dV_cor>,<T_A>,<T_et>,<kappa>,<tau_opt>,<sigma_T>*<CRC16>
+```
+
+The frame uses:
+
+- CRC-16-CCITT with initial value `0xFFFF` and polynomial `0x1021`;
+- values formatted for host logging and plotting;
+- uppercase hexadecimal CRC digits padded to four characters.
+
+### Retrospective correction frame
+
+```text
+$RTM_COR,<timestamp_ms>,<dV_interp>,<T_A_interp>,<k_interp>*<CRC16>
+```
+
+This frame is emitted after a completed asymmetry calibration to report the
+historical samples corrected with interpolated kappa.
+
+### Commands
+
+Send commands as newline-terminated ASCII text:
+
+- `CMD:START` - switch to measuring mode.
+- `CMD:STOP` - stop acquisition and wait in idle mode.
+- `CMD:CAL_ASYM` - calibrate asymmetry coefficient `k`.
+- `CMD:KCAL=<value>` - set the detector scale in linearized units per degree C.
+- `CMD:DTDOP=<value>` - set the allowed temperature-ready error in degrees C.
+
+Numeric command values must be finite and within the firmware validation
+ranges.
+
+## Configuration
+
+Hardware pins and acquisition/processing constants are in `include/config.h`.
+Main project settings are in `platformio.ini`.
+
+Build and upload the firmware:
+
+```sh
+platformio run --target upload
+```
+
+The serial monitor should use 460800 baud:
+
+```sh
+platformio device monitor --baud 460800
+```

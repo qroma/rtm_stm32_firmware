@@ -37,3 +37,4 @@ constexpr float    DETECTOR_V_REF_MV    = 1500.0f; // Опорна точка н
 // --- Інтерфейси ---
 constexpr uint32_t UART_BAUD_RATE       = 460800;  // Висока швидкість VCP ST-LINK (~2 мс на кадр CSV)
 constexpr uint8_t  SHT3X_I2C_ADDR       = 0x44;    // Адреса I2C датчика температури еталона (SHT3x)
+constexpr size_t   CAL_ASYM_SAMPLES     = 10;      // 10 децимованих відліків = 1.0 с усереднення калібрування k

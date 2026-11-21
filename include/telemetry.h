@@ -8,8 +8,18 @@
 class TelemetryManager {
 public:
     static uint16_t computeCRC16(const uint8_t* data, size_t length);
-    static void     sendFrameCSV(const TelemetryFrame& frame);
-    static void     processIncomingCommands(SystemMode& mode, DSPPipeline& dsp, AllanTracker& allan);
+
+    // Оперативний кадр телеметрії ($RTM,...*CRC16)
+    static void sendFrameCSV(const TelemetryFrame& frame);
+
+    // Ретроспективно скоригований відлік після лінійної інтерполяції k_interp(t) ($RTM_COR,...*CRC16)
+    static void sendInterpolatedSampleCSV(uint32_t timestamp_ms,
+                                          float dv_interp_lin,
+                                          float t_a_interp_c,
+                                          float k_interp);
+
+    // Неблокуюче зчитування команд керування від ПК по UART
+    static void processIncomingCommands(SystemMode& mode, DSPPipeline& dsp, AllanTracker& allan);
 
 private:
     static void handleCommandLine(const char* cmd, SystemMode& mode, DSPPipeline& dsp, AllanTracker& allan);

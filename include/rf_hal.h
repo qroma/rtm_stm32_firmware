@@ -29,12 +29,16 @@ public:
 
     ADC_HandleTypeDef* getAdcHandle() { return &hadc1_; }
     DMA_HandleTypeDef* getDmaHandle() { return &hdma_adc1_; }
+    
 
 private:
     void initAdcAndDma();
     void initSampleTriggerTim6();
     void initDickeTimerTim2();
     void setSwitchStateFast(RFSource source);
+
+    static uint8_t computeSht3xCrc8(uint8_t msb, uint8_t lsb);
+    void           rearmDmaTransferISR(uint16_t* target_buf);
 
     ADC_HandleTypeDef hadc1_{};
     DMA_HandleTypeDef hdma_adc1_{};
