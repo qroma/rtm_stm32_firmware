@@ -156,7 +156,9 @@ void RFHardware::initDickeTimerTim2() {
 }
 
 void RFHardware::setSwitchStateFast(RFSource source) {
-    digitalWrite(PIN_SW_V1, (source == RFSource::Antenna) ? LOW : HIGH);
+    // Таблиця істинності HMC849 (при EN = LOW):
+    // Vctl = HIGH -> RFC-RF1 ON (Антена), Vctl = LOW -> RFC-RF2 ON (Еталон)
+    digitalWrite(PIN_SW_V1, (source == RFSource::Antenna) ? HIGH : LOW);
 }
 
 void RFHardware::startAcquisition() {
